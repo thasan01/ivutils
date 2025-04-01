@@ -27,14 +27,28 @@ def get_details(handle: cv2.VideoCapture) -> tuple[int, int, int, float]:
     return length, width, height, fps
 
 
-def get_frame_id(time_stamps: list[float], in_handle: cv2.VideoCapture = None, fps: float = None):
+def convert_sec(timestamp: str):
+    """
+    Convert a video timestamp (MM:SS) to seconds.
+
+    Args:
+        timestamp (str): Timestamp in the format MM:SS.
+
+    Returns:
+        int: Timestamp in seconds.
+    """
+    minutes, seconds = map(int, timestamp.split(':'))
+    return minutes * 60 + seconds
+
+
+def get_frame_ids(time_stamps: list[int], in_handle: cv2.VideoCapture = None, fps: float = None):
     """
     Calculate frame IDs from timestamps.
 
     Args:
-    time_stamps (list[float]): List of timestamps in seconds.
+    time_stamps (list[int]): List of timestamps in seconds.
     in_handle (cv2.VideoCapture, optional): Video capture object. Defaults to None.
-    fps (float, optional): Frames per second. Defaults to None.
+    fps (int, optional): Frames per second. Defaults to None.
 
     Returns:
     list[int]: List of frame IDs.
@@ -57,9 +71,9 @@ def get_frame_id(time_stamps: list[float], in_handle: cv2.VideoCapture = None, f
 
 
 def extract_video_frames(
-        in_filename: str,
         out_dir: str,
         out_file_pattern: str,
+        in_filename: str = None,
         in_handle: cv2.VideoCapture = None,
         frame_interval: int = 1,
         resize_dim: tuple[int, int] = None,
@@ -79,13 +93,17 @@ def extract_video_frames(
         frame_count = start_frame
 
         max_frames, frame_width, frame_height, _ = get_details(cap)
-        transform_func = resize if (frame_width, frame_height) != resize_dim else do_nothing
+
+        # Set the transformation function based on resize_dim
+        if resize_dim is not None and (frame_width, frame_height) != resize_dim:
+            transform_func = resize
+        else:
+            transform_func = do_nothing
 
         if end_frame is None:
             end_frame = max_frames
 
-        assert (
-                0 <= start_frame <= end_frame <= max_frames), f"Invalid range of start_frame: {start_frame} to end_frame: {end_frame}"
+        assert (0 <= start_frame <= end_frame <= max_frames), f"Invalid range of start_frame: {start_frame} to end_frame: {end_frame}"
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
