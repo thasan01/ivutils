@@ -35,13 +35,13 @@ def process_parser(args):
     if args.task == Tasks.TRANSFORM:
         trans_steps = []
 
+        if args.crop_step:
+            top, bottom, left, right = map(int, args.crop_step.split('x'))
+            trans_steps.append(vid.CropStep(top, bottom, left, right))
+
         if args.resize_step:
             new_width, new_height = map(int, args.resize_step.split('x'))
             trans_steps.append(vid.ResizeTask((new_width, new_height)))
-
-        if args.crop_step:
-            top, bottom, left, right = map(int, args.resize_step.split('x'))
-            trans_steps.append(vid.CropStep(top, bottom, left, right))
 
         vid.task_transform(
             args.source,
@@ -50,6 +50,7 @@ def process_parser(args):
             end_frame = args.end_frame,
             start_time = args.start_time,
             end_time = args.end_time,
-            frame_interval = args.frame_interval)
+            frame_interval = args.frame_interval,
+            trans_steps=trans_steps)
     else:
         raise ValueError(f"Invalid task: {args.task}")
