@@ -1,225 +1,139 @@
-from typing import Tuple, Dict, Set
+import cv2
+import numpy as np
+from typing import Tuple, Optional
 
-import csv
-import os
-from PIL import Image
-import inspect
+def resize_image(src_img_file:str,
+                 dest_img_file:str,
+                 resize_dim: Tuple[int, int]):
+    in_img = cv2.imread(src_img_file)
+    out_img = resize_image_array(in_img, resize_dim=resize_dim)
+    cv2.imwrite(dest_img_file, out_img)
 
-
-def batch_image_grid(src_dirs: list[str], in_pattern: str, out_file_format: str, grid_size: Tuple[int, int], wrap_last_img: bool = False):
-
-    def files_in_dir_gen(dir_idx: int):
-        directory = src_dirs[dir_idx]
-        for f in os.listdir(directory):
-            if in_pattern in f:
-                yield os.path.join(directory, f)
-
-    def load_image_to_buffer(img_path: str, buffer: Image):
-        with Image.open(img_path) as new_img:
-            # Resize the new image to match the size of the reusable object
-            new_img = new_img.resize((img_width, img_height))
-            # Update the pixels of the reusable object
-            img_buffer.paste(new_img)
-
-    def get_image_details(dir_path: str):
-        img_filename = None
-        for f in os.listdir(dir_path):
-            if in_pattern in f:
-                img_filename = os.path.join(dir_path, f)
-                break
-
-        width, height, mode = None, None, None
-        if img_filename is not None:
-            with Image.open(img_filename) as img:
-                width, height, mode = img.width, img.height, img.mode
-
-        return width, height, mode
-
-    if len(src_dirs) == 0:
-        return
-
-    get_image_details(src_dirs[0])
-    num_rows, num_cols = grid_size
-
-    img_width, img_height, img_mode = get_image_details(src_dirs[0])
-    black_img  = Image.new(img_mode, (num_cols * img_width, num_rows * img_height), (0,0,0))
-    grid_image = Image.new(img_mode, (num_cols * img_width, num_rows * img_height))
-    img_buffer = Image.new(img_mode, (img_width, img_height))
-
-    dir_idx = 0
-    img_files_gen = files_in_dir_gen(dir_idx)
-
-    batch_id = 0
-    while inspect.getgeneratorstate(img_files_gen) != inspect.GEN_CLOSED:
-
-        for row in range(num_rows):
-            col = 0
-            end_of_dir_files = False
-            try:
-                for col in range(num_cols):
-                    img_file = next(img_files_gen)
-
-                    load_image_to_buffer(img_file, img_buffer)
-                    grid_image.paste(img_buffer, (col * img_width, row * img_height))
-            except StopIteration:
-                end_of_dir_files = True
-                if wrap_last_img:
-                    for i in range(num_cols - col):
-                        grid_image.paste(img_buffer, ((col + i) * img_width, row * img_height))
-
-            if end_of_dir_files:
-                dir_idx += 1
-                if dir_idx >= len(src_dirs):
-                    break
-                else:
-                    img_files_gen = files_in_dir_gen(dir_idx)
-
-        out_batch_file = out_file_format.format(**{"batch_id": batch_id})
-        batch_id += 1
-        grid_image.save(out_batch_file)
-        grid_image.paste(black_img, (0, 0))
-    return
-
-
-def get_image_from_grid(
-                        img_target: Image,
-                        target_index: int,
-                        grid_size: tuple,
-                        img_batch_filename: str = None,
-                        img_batch: Image = None) -> Image:
+def resize_image_array(src_img: np.ndarray,
+                       resize_dim: Tuple[int, int]) -> Optional[np.ndarray]:
     """
-    Extracts an image from a grid of images and pastes it onto a target image.
+    Preprocesses a NumPy array image to a target size while maintaining
+    aspect ratio via letterboxing (padding).
+
 
     Args:
-    - img_batch_filename (str): The filename of the batch image. (Mutually exclusive with img_batch)
-    - img_batch (Image): The batch image containing the grid of images. (Mutually exclusive with img_batch_filename)
-    - img_target (Image): The target image where the extracted image will be pasted.
-    - target_index (int): The index of the image to extract from the grid.
-    - grid_size (tuple): The size of the grid (m, n) in the batch image.
+        src_img: NumPy array of shape (H, W, C).
+        resize_dim: Tuple (width, height) for the target size.
 
     Returns:
-    - The target image with the extracted image pasted onto it.
-
-    Raises:
-    - ValueError: If both img_batch_filename and img_batch are provided, or if neither is provided.
-    - ValueError: If target_index is out of range of grid_size.
+        A NumPy array of the target size, or None if an error occurred.
     """
 
-    # Validate that exactly one of img_batch_filename and img_batch is provided
-    if (img_batch_filename is None) == (img_batch is None):
-        raise ValueError("Must provide exactly one of img_batch_filename and img_batch")
-
-    # Load the batch image if a filename is provided
-    if img_batch_filename is not None:
-        img_batch = Image.open(img_batch_filename)
-
-    # Validate that target_index is within the range of grid_size
-    grid_m, grid_n = grid_size
-    if target_index < 0 or target_index >= grid_m * grid_n:
-        raise ValueError("target_index is out of range of grid_size")
-
-    # Calculate the position of the image to extract from the grid
-    img_x = (target_index % grid_n) * (img_batch.width // grid_n)
-    img_y = (target_index // grid_n) * (img_batch.height // grid_m)
-
-    # Crop the image from the grid
-    img_extracted = img_batch.crop(
-        (img_x, img_y, img_x + (img_batch.width // grid_n), img_y + (img_batch.height // grid_m)))
-
-    # Paste the extracted image onto the target image
-    # Paste at position (0, 0) since target image is the same size as the extracted image
-    img_target.paste(img_extracted, (0, 0))
-
-    return img_target
-
-
-def preprocess_image(image_path, resize_dim=(640, 480)):
-    """Preprocesses an image to a target size (16:9) while handling different aspect ratios.
-
-    Args:
-        image_path: Path to the image.
-        resize_dim: Tuple (width, height) for the target size (default: 640x480).
-
-    Returns:
-        A PIL Image object, or None if an error occurred.
-    """
-    try:
-        image = Image.open(image_path).convert("RGB")
-    except FileNotFoundError:
-        print(f"Error: Image not found at {image_path}")
-        return None  # Return None on error
-    except Exception as e:
-        print(f"Error opening image: {e}")
+    if src_img is None:
         return None
 
-    ow, oh = image.size
-    aspect_ratio = ow / oh
-    target_ratio = resize_dim[0] / resize_dim[1]
+    oh, ow = src_img.shape[:2]
+    target_w, target_h = resize_dim
 
-    if aspect_ratio > target_ratio:  # Landscape
-        new_h = int(oh * (resize_dim[0] / ow))
-        image = image.resize((resize_dim[0], new_h), Image.BICUBIC)
-        padding = (0, (resize_dim[1] - new_h) // 2, 0, resize_dim[1] - new_h - (resize_dim[1] - new_h) // 2)
-        # Create a new image with the target size and black background color
-        new_image = Image.new("RGB", resize_dim, (0, 0, 0))
-        # Paste the resized image onto the new image with padding
-        new_image.paste(image, (0, (resize_dim[1] - new_h) // 2))
-        image = new_image  # Update the image reference to the new padded image
+    # take the minimum scale to ensure the image fits within target_dim
+    scale = min(target_w / ow, target_h / oh)
+    new_w = int(ow * scale)
+    new_h = int(oh * scale)
 
-    elif aspect_ratio < target_ratio:  # Portrait
-        new_w = int(ow * (resize_dim[1] / oh))
-        image = image.resize((new_w, resize_dim[1]), Image.BICUBIC)
-        padding = ((resize_dim[0] - new_w) // 2, 0, resize_dim[0] - new_w - (resize_dim[0] - new_w) // 2, 0)
-        new_image = Image.new("RGB", resize_dim, (0, 0, 0))
-        new_image.paste(image, ((resize_dim[0] - new_w) // 2, 0))
-        image = new_image  # Update the image reference
+    # 1. Faster Interpolation: INTER_LINEAR is usually 3-5x faster than CUBIC
+    resized_image = cv2.resize(src_img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-    else:  # Already 16:9
-        image = image.resize(resize_dim, Image.BICUBIC)
+    # 2. Optimized Padding: copyMakeBorder is faster than manual slicing
+    # Calculate padding for all sides
+    delta_w = target_w - new_w
+    delta_h = target_h - new_h
 
-    return image  # Return the processed image
+    top, bottom = delta_h // 2, delta_h - (delta_h // 2)
+    left, right = delta_w // 2, delta_w - (delta_w // 2)
 
-
-def resize_images(src_dir: str, out_file_format: str, search_ext: Set[str], trg_size: Tuple[int, int] = (320, 240), mappings_file: str = None):
-
-    def callback(src_filename: str, trg_filename: str):
-        img = preprocess_image(image_path=src_filename, resize_dim=trg_size)
-        if img is not None:
-            img.save(trg_filename)
-
-    file_mappings = __iterate_files_recursive(src_dir, out_file_format, callback, search_ext)
-    if mappings_file:
-        with open(mappings_file, mode='w', newline='') as file:
-            csv.writer(file).writerows(file_mappings)
+    return cv2.copyMakeBorder(
+        resized_image,
+        top, bottom, left, right,
+        cv2.BORDER_CONSTANT,
+        value=[0, 0, 0]
+    )
 
 
-def __iterate_files_recursive(root_dir: str, out_file_format: str, callback: callable, search_ext: Set[str]):
+def calculate_crop_offsets(h: int, w: int,
+                           top: float, bottom: float,
+                           left: float, right: float) -> Tuple[int, int, int, int]:
     """
-    Iterates over all files in a directory and its subdirectories.
-
-    :param root_dir:
-    :param out_file_format:
-    :param callback:
-    :param search_ext:
-    :return:
+    Resolves crop parameters:
+    - Floats (0.0 to 1.0): Percentage of the dimension.
+    - Positive Ints: Absolute bounding box coordinates.
+    - Negative Ints: Pixels to remove from that specific edge.
     """
-    file_map = []
-    out_file = ""
-    try:
-        seq_id = 0
-        for cur_dir, _, files in os.walk(root_dir):
-            rel_dir = os.path.relpath(cur_dir, root_dir)
-            for file in files:
-                _, file_ext = os.path.splitext(file)
-                if file_ext in search_ext:
-                    out_file = out_file_format.format(seq_id=seq_id)
-                    seq_id += 1
-                    file_map.append([os.path.join(rel_dir, file), out_file])
-                    callback(os.path.join(cur_dir, file), out_file)
 
-    except FileNotFoundError as ex:
-        print(f"Error: {out_file} : {ex}")
-    except OSError as ex:
-        print(f"Error accessing directory '{root_dir}': {ex}")
+    def resolve_dim(val, total, is_end_coord=False):
+        # 1. Handle Percentages
+        if isinstance(val, float) and -1.0 <= val <= 1.0 and val != 0:
+            return abs(int(val * total))
 
-    return file_map
+        # 2. Handle Negative (Relative offsets)
+        if val < 0:
+            return abs(int(val))
+
+        # 3. Handle Positive (Absolute coordinates)
+        if val > 0:
+            if is_end_coord:
+                # If bottom/right is coordinate 950, remove (total - 950)
+                return max(0, total - int(val))
+            else:
+                # If top/left is coordinate 470, remove 470
+                return int(val)
+
+        return 0
+
+    t = resolve_dim(top, h, is_end_coord=False)
+    b = resolve_dim(bottom, h, is_end_coord=True)
+    l = resolve_dim(left, w, is_end_coord=False)
+    r = resolve_dim(right, w, is_end_coord=True)
+
+    return t, b, l, r
+
+
+def crop_image(src_img_file: str,
+               dest_img_file: str,
+               top: float = 0, bottom: float = 0,
+               left: float = 0, right: float = 0):
+    in_img = cv2.imread(src_img_file)
+    if in_img is None:
+        print(f"Error: Could not open {src_img_file}")
+        return
+
+    h, w = in_img.shape[:2]
+    t, b, l, r = calculate_crop_offsets(h, w, top, bottom, left, right)
+
+    # Check if the crop is valid
+    if (t + b) >= h or (l + r) >= w:
+        print(f"Error: Crop logic resulted in 0 or negative dimensions.")
+        print(f"Requested: Top/Bottom offsets {t}/{b} for height {h}")
+        print(f"Requested: Left/Right offsets {l}/{r} for width {w}")
+        return
+
+    out_img = crop_image_array(in_img, t, b, l, r)
+    cv2.imwrite(dest_img_file, out_img)
+
+
+def crop_image_array(src_img: np.ndarray,
+                     top: int = 0, bottom: int = 0,
+                     left: int = 0, right: int = 0) -> Optional[np.ndarray]:
+    """
+    Crops a NumPy array image based on pixel offsets from the edges.
+    """
+    if src_img is None:
+        return None
+
+    h, w = src_img.shape[:2]
+
+    # Calculate new boundaries
+    # Using max(0, ...) and min(limit, ...) to prevent out-of-bounds errors
+    start_y = max(0, top)
+    end_y = min(h, h - bottom)
+    start_x = max(0, left)
+    end_x = min(w, w - right)
+
+    # Perform the crop via slicing
+    cropped_img = src_img[start_y:end_y, start_x:end_x]
+
+    return cropped_img

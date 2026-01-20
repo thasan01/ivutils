@@ -1,8 +1,34 @@
 import cv2
-import os
-import re
-from PIL import Image
-import inspect
+from . import image as img
+
+class TaskStep:
+    def apply(self, frame):
+        pass
+    def calc_dims(self)->tuple[int,int]:
+        return -1, -1
+
+class CropStep(TaskStep):
+    def __init__(self, top, bottom, left, right):
+        self.top = top
+        self.bottom = bottom
+        self.left = left
+        self.right = right
+
+    def calc_dims(self):
+        return self.top -self.bottom, self.left -self.right
+
+    def apply(self, frame):
+        return img.crop_image_array(frame, self.top, self.bottom, self.left, self.right)
+
+class ResizeTask(TaskStep):
+    def __init__(self, resize_dim: tuple[int,int]):
+        self.resize_dim = resize_dim
+
+    def calc_dims(self):
+        return self.resize_dim
+
+    def apply(self, frame):
+        return img.resize_image_array(frame,self.resize_dim)
 
 
 def get_file_handle(filename: str) -> cv2.VideoCapture:
@@ -29,141 +55,94 @@ def get_details(handle: cv2.VideoCapture) -> tuple[int, int, int, float]:
 
 def convert_sec(timestamp: str):
     """
-    Convert a video timestamp (MM:SS) to seconds.
+    Convert a video timestamp (HH:MM:SS or MM:SS) to seconds.
 
     Args:
-        timestamp (str): Timestamp in the format MM:SS.
+        timestamp (str): Timestamp in the format HH:MM:SS or MM:SS.
 
     Returns:
         int: Timestamp in seconds.
     """
-    minutes, seconds = map(int, timestamp.split(':'))
-    return minutes * 60 + seconds
+    parts = list(map(int, timestamp.split(':')))
+
+    if len(parts) == 3:
+        # Format is HH:MM:SS
+        hours, minutes, seconds = parts
+        return hours * 3600 + minutes * 60 + seconds
+    elif len(parts) == 2:
+        # Format is MM:SS
+        minutes, seconds = parts
+        return minutes * 60 + seconds
+    elif len(parts) == 1:
+        # Format is just SS
+        return parts[0]
+    else:
+        raise ValueError("Invalid timestamp format. Use HH:MM:SS or MM:SS")
 
 
-def get_frame_ids(time_stamps: list[int], in_handle: cv2.VideoCapture = None, fps: float = None):
-    """
-    Calculate frame IDs from timestamps.
-
-    Args:
-    time_stamps (list[int]): List of timestamps in seconds.
-    in_handle (cv2.VideoCapture, optional): Video capture object. Defaults to None.
-    fps (int, optional): Frames per second. Defaults to None.
-
-    Returns:
-    list[int]: List of frame IDs.
-
-    Raises:
-    AssertionError: If neither in_handle nor fps is provided.
-    """
-
-    assert (in_handle is None) ^ (fps is None), "This function must take either in_handle or fps as input."
-
-    if fps is None:
-        fps = in_handle.get(cv2.CAP_PROP_FPS)
-
-    # Calculate frame IDs
-    frame_ids = [int(round(timestamp * fps)) for timestamp in time_stamps]
-
-    # Ensure frame IDs are non-negative
-    frame_ids = [max(frame_id, 0) for frame_id in frame_ids]
-    return frame_ids
-
-
-def extract_video_frames(
-        out_dir: str,
-        out_file_pattern: str,
-        in_filename: str = None,
-        in_handle: cv2.VideoCapture = None,
+def task_transform(
+        src_filename:str,
+        trg_filename: str,
+        start_frame:int = None,
+        end_frame:int = None,
+        start_time: str = None,
+        end_time: str = None,
         frame_interval: int = 1,
-        resize_dim: tuple[int, int] = None,
-        start_frame: int = 0,
-        end_frame: int = None
+        trans_steps:list[TaskStep]=None
 ):
-    assert (in_handle is None) ^ (
-            in_filename is None), "This function must take either in_handle or in_filename as input. Not both."
 
-    def resize(frame):
-        return cv2.resize(frame, resize_dim)
+    def time_to_frame(time_val, frame_id, default_frame, fps):
+        if frame_id:
+            return frame_id
+        if not time_val:
+            return default_frame
+        elif ":" in time_val:
+            time_val = convert_sec(time_val)
 
-    def do_nothing(frame):
-        return frame
+        frame_id = int(round(time_val * fps))
+        return frame_id
 
-    def process_video(cap: cv2.VideoCapture, start_frame: int, end_frame: int):
-        frame_count = start_frame
+    if trans_steps is None:
+        trans_steps = []
 
-        max_frames, frame_width, frame_height, _ = get_details(cap)
+    src_vid = None
+    trg_vid = None
 
-        # Set the transformation function based on resize_dim
-        if resize_dim is not None and (frame_width, frame_height) != resize_dim:
-            transform_func = resize
-        else:
-            transform_func = do_nothing
+    try:
+        src_vid = get_file_handle(src_filename)
+        src_max_frames, src_frame_width, src_frame_height, src_fps = get_details(src_vid)
 
-        if end_frame is None:
-            end_frame = max_frames
+        start_frame = time_to_frame(start_time, start_frame, 0, src_fps)
+        end_frame = time_to_frame(end_time, end_frame, src_max_frames, src_fps)
 
-        assert (0 <= start_frame <= end_frame <= max_frames), f"Invalid range of start_frame: {start_frame} to end_frame: {end_frame}"
+        assert (0 <= start_frame <= end_frame <= src_max_frames), f"Invalid range of start_frame: {start_frame} to end_frame: {end_frame}"
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        new_width = src_frame_width
+        new_height = src_frame_height
+
+        if trans_steps:
+            new_height, new_width = trans_steps[-1].calc_dims()
+
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        trg_vid = cv2.VideoWriter(trg_filename, fourcc, src_fps, (new_width, new_height))
+
+        curr_frame = start_frame
+        src_vid.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         while True:
-            # Read frame from video
-            ret, frame = cap.read()
+            ret, frame = src_vid.read()
 
             # Break loop if frame is not read successfully
-            if not ret or frame_count >= end_frame:
+            if not ret or curr_frame >= end_frame:
                 break
 
-            # Increment frame counter
-            frame_count += 1
+            curr_frame += 1
 
-            # Check if it's time to extract an image
-            if frame_count % frame_interval == 0:
-                final_filename = out_file_pattern.format(frame_id=frame_count,
-                                                         step_id=(frame_count - start_frame) // frame_interval)
-                frame = transform_func(frame)
-                print(f"writing to file: {final_filename}")
-                # Save resized frame to file
-                cv2.imwrite(os.path.join(out_dir, final_filename), frame)
+            if curr_frame % frame_interval == 0:
+                for step in trans_steps:
+                    frame = step.apply(frame)
+                trg_vid.write(frame)
 
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-
-    if in_filename is not None:
-        hfile = get_file_handle(in_filename)
-        process_video(hfile, start_frame, end_frame)
-        release_file_handle(hfile)
-
-    elif in_handle is not None:
-        process_video(in_handle, start_frame, end_frame)
-
-
-def reindex_file_sequence(src_dir: str, file_pattern: str, precision: int = 1, init_seq_val: int = 0):
-    """
-    Analyses all the files of a directory to filter on a sequence pattern. Then iterates over the pattern to find any missing values and re-indexes the files to form a continious sequence
-
-    :param src_dir:
-    :param file_pattern:
-    :param precision:
-    :param init_seq_val:
-    :return:
-    """
-
-    def sequence_generator():
-        seq_id = init_seq_val
-        seq_id_pattern = re.compile(file_pattern).pattern
-        seq_id_pattern = seq_id_pattern.replace("^", "").replace("$", "").replace("__", "_")
-        while True:
-            file_name = seq_id_pattern.replace("(?P<seq_id>\\d{6})", f"{seq_id:0{precision}d}").replace("\\", "")
-            yield file_name
-            seq_id += 1
-
-    files = [f for f in os.listdir(src_dir) if re.search(file_pattern, f)]
-    seq_gen = sequence_generator()
-    for actual in files:
-        expected = next(seq_gen)
-        print(f"expected: {expected}")
-        if actual != expected:
-            print(f"rename {actual} to {expected}")
-            os.rename(os.path.join(src_dir, actual), os.path.join(src_dir, expected))
+    finally:
+        if src_vid: release_file_handle(src_vid)
+        if trg_vid: trg_vid.release()
