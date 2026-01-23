@@ -5,7 +5,7 @@ with open("README.md") as fp:
 
 setup(
     name="ivutils",
-    version="0.0.4",
+    version="0.0.5",
     license="MIT license",
     long_description=desc_text,
     long_description_content_type= "text/markdown",

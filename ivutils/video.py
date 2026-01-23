@@ -123,7 +123,6 @@ def task_transform(
         if trans_steps:
             new_width, new_height = trans_steps[-1].calc_dims()
 
-        print(f"new_height: {new_height}, new_width: {new_width}")
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         trg_vid = cv2.VideoWriter(trg_filename, fourcc, src_fps, (new_width, new_height))
 
